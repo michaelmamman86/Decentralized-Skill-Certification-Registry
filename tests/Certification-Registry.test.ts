@@ -111,3 +111,7 @@ describe("Certification-Registry contract", () => {
     expect(revokeCall.result).toBeOk(Cl.bool(true));
   });
 });
+
+
+
+// TODO: Add more tests to cover all the contract functions
