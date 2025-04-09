@@ -655,3 +655,127 @@
 (define-read-only (get-certification-dispute (cert-id uint))
     (map-get? certification-disputes cert-id)
 )
+
+
+
+(define-map certification-templates
+    uint
+    {
+        name: (string-ascii 64),
+        skill: (string-ascii 64),
+        validity-period: uint,
+        metadata: (string-ascii 256),
+        level: uint
+    }
+)
+
+(define-data-var template-counter uint u0)
+
+(define-public (create-certification-template
+    (name (string-ascii 64))
+    (skill (string-ascii 64))
+    (validity-period uint)
+    (metadata (string-ascii 256))
+    (level uint))
+    (let
+        ((template-id (var-get template-counter)))
+        (asserts! (default-to false (map-get? authorized-issuers tx-sender)) ERR-NOT-AUTHORIZED)
+        (var-set template-counter (+ template-id u1))
+        (ok (map-set certification-templates template-id
+            {
+                name: name,
+                skill: skill,
+                validity-period: validity-period,
+                metadata: metadata,
+                level: level
+            }
+        ))
+    )
+)
+
+(define-public (issue-certification-from-template
+    (template-id uint)
+    (recipient principal))
+    (let
+        ((template (unwrap! (map-get? certification-templates template-id) ERR-INVALID-CERTIFICATION)))
+        (asserts! (default-to false (map-get? authorized-issuers tx-sender)) ERR-NOT-AUTHORIZED)
+        (issue-certification
+            recipient
+            (get skill template)
+            (+ stacks-block-height (get validity-period template))
+            (get metadata template)
+        )
+    )
+)
+
+
+(define-map batch-issuance-records 
+    uint 
+    { recipients: (list 50 principal), timestamp: uint }
+)
+
+(define-data-var batch-counter uint u0)
+
+(define-public (issue-batch-certifications
+    (recipients (list 50 principal))
+    (skill (string-ascii 64))
+    (expiry-date uint)
+    (metadata (string-ascii 256)))
+    (let
+        ((batch-id (var-get batch-counter)))
+        
+        (asserts! (default-to false (map-get? authorized-issuers tx-sender)) ERR-NOT-AUTHORIZED)
+        (var-set batch-counter (+ batch-id u1))
+        
+        (map-set batch-issuance-records batch-id
+            { recipients: recipients, timestamp: stacks-block-height }
+        )
+        
+        (ok (map process-single-recipient recipients 
+            (list skill)
+            (list expiry-date)
+            (list metadata)))
+    )
+)
+
+
+(define-fungible-token certification-rewards)
+
+(define-map staked-certifications
+    uint 
+    { staker: principal, amount: uint, start-height: uint }
+)
+
+(define-constant REWARDS-PER-BLOCK u10)
+(define-constant MIN-STAKE-BLOCKS u100)
+
+(define-public (stake-certification 
+    (cert-id uint)
+    (amount uint))
+    (let
+        ((cert-info (unwrap! (map-get? certification-details cert-id) ERR-INVALID-CERTIFICATION)))
+        
+        (asserts! (is-eq tx-sender (get recipient cert-info)) ERR-NOT-AUTHORIZED)
+        
+        (map-set staked-certifications cert-id
+            { staker: tx-sender, amount: amount, start-height: stacks-block-height }
+        )
+        
+        (ok true)
+    )
+)
+
+(define-public (claim-staking-rewards (cert-id uint))
+    (let
+        ((stake-info (unwrap! (map-get? staked-certifications cert-id) ERR-INVALID-CERTIFICATION))
+         (blocks-staked (- stacks-block-height (get start-height stake-info))))
+        
+        (asserts! (>= blocks-staked MIN-STAKE-BLOCKS) ERR-NOT-AUTHORIZED)
+        (asserts! (is-eq tx-sender (get staker stake-info)) ERR-NOT-AUTHORIZED)
+        
+        (ft-mint? certification-rewards 
+            (* blocks-staked REWARDS-PER-BLOCK)
+            tx-sender
+        )
+    )
+)
