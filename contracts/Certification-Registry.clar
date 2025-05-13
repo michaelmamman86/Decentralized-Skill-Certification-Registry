@@ -779,3 +779,129 @@
         )
     )
 )
+
+
+(define-map certification-bundles
+    uint 
+    {
+        name: (string-ascii 64),
+        cert-ids: (list 10 uint),
+        price: uint,
+        discount: uint,
+        issuer: principal,
+        active: bool
+    }
+)
+
+(define-data-var bundle-counter uint u0)
+
+(define-public (create-certification-bundle
+    (name (string-ascii 64))
+    (cert-ids (list 10 uint))
+    (price uint)
+    (discount uint))
+    (let
+        ((bundle-id (var-get bundle-counter)))
+        (asserts! (default-to false (map-get? authorized-issuers tx-sender)) ERR-NOT-AUTHORIZED)
+        (var-set bundle-counter (+ bundle-id u1))
+        (ok (map-set certification-bundles bundle-id
+            {
+                name: name,
+                cert-ids: cert-ids,
+                price: price,
+                discount: discount,
+                issuer: tx-sender,
+                active: true
+            }
+        ))
+    )
+)
+
+(define-read-only (get-certification-skill (cert-id uint))
+    (get skill (default-to { skill: "" } (map-get? certification-details cert-id))))
+
+(define-read-only (get-certification-expiry (cert-id uint))
+    (get expiry-date (default-to { expiry-date: u0 } (map-get? certification-details cert-id))))
+
+(define-read-only (get-certification-metadata (cert-id uint))
+    (get metadata (default-to { metadata: "" } (map-get? certification-details cert-id))))
+
+(define-public (purchase-certification-bundle 
+    (bundle-id uint)
+    (recipient principal))
+    (let
+        ((bundle (unwrap! (map-get? certification-bundles bundle-id) ERR-INVALID-CERTIFICATION)))
+        (asserts! (get active bundle) ERR-INVALID-CERTIFICATION)
+        (ok (map process-single-recipient 
+            (list recipient)
+            (map get-certification-skill (get cert-ids bundle))
+            (map get-certification-expiry (get cert-ids bundle))
+            (map get-certification-metadata (get cert-ids bundle))
+        ))
+    )
+)
+
+
+(define-map marketplace-listings
+    uint
+    {
+        cert-id: uint,
+        seller: principal,
+        price: uint,
+        description: (string-ascii 256),
+        listed-at: uint
+    }
+)
+
+(define-data-var listing-counter uint u0)
+
+(define-public (create-marketplace-listing
+    (cert-id uint)
+    (price uint)
+    (description (string-ascii 256)))
+    (let
+        ((cert-info (unwrap! (map-get? certification-details cert-id) ERR-INVALID-CERTIFICATION))
+         (listing-id (var-get listing-counter)))
+        (asserts! (is-eq tx-sender (get recipient cert-info)) ERR-NOT-AUTHORIZED)
+        (var-set listing-counter (+ listing-id u1))
+        (ok (map-set marketplace-listings listing-id
+            {
+                cert-id: cert-id,
+                seller: tx-sender,
+                price: price,
+                description: description,
+                listed-at: stacks-block-height
+            }
+        ))
+    )
+)
+
+(define-public (purchase-marketplace-listing
+    (listing-id uint))
+    (let
+        ((listing (unwrap! (map-get? marketplace-listings listing-id) ERR-INVALID-CERTIFICATION)))
+        (try! (stx-transfer? (get price listing) tx-sender (get seller listing)))
+        (try! (transfer-certification (get cert-id listing) tx-sender))
+        (ok true)
+    )
+)
+
+(define-public (remove-marketplace-listing
+    (listing-id uint))
+    (let
+        ((listing (unwrap! (map-get? marketplace-listings listing-id) ERR-INVALID-CERTIFICATION)))
+        (asserts! (is-eq tx-sender (get seller listing)) ERR-NOT-AUTHORIZED)
+        (ok (map-set marketplace-listings listing-id
+            {
+                cert-id: u0,
+                seller: tx-sender,
+                price: u0,
+                description: "",
+                listed-at: u0
+            }
+        ))
+    )
+)
+(define-read-only (get-marketplace-listing (listing-id uint))
+    (map-get? marketplace-listings listing-id)
+)
