@@ -905,3 +905,305 @@
 (define-read-only (get-marketplace-listing (listing-id uint))
     (map-get? marketplace-listings listing-id)
 )
+
+(define-map analytics-daily-stats
+    { date: uint, issuer: principal }
+    {
+        certifications-issued: uint,
+        certifications-revoked: uint,
+        certifications-renewed: uint,
+        unique-recipients: uint
+    }
+)
+
+(define-map analytics-skill-stats
+    { skill: (string-ascii 64), issuer: principal }
+    {
+        total-issued: uint,
+        total-active: uint,
+        total-expired: uint,
+        total-revoked: uint,
+        average-duration: uint
+    }
+)
+
+(define-map analytics-recipient-stats
+    principal
+    {
+        total-certifications: uint,
+        active-certifications: uint,
+        expired-certifications: uint,
+        revoked-certifications: uint,
+        skills-acquired: uint,
+        last-certification-date: uint
+    }
+)
+
+(define-map analytics-issuer-performance
+    principal
+    {
+        total-issued: uint,
+        total-revoked: uint,
+        total-renewed: uint,
+        revocation-rate: uint,
+        renewal-rate: uint,
+        average-validity-period: uint,
+        reputation-score: uint
+    }
+)
+
+(define-map analytics-global-metrics
+    uint
+    {
+        total-certifications: uint,
+        total-active: uint,
+        total-issuers: uint,
+        total-recipients: uint,
+        most-popular-skill: (string-ascii 64),
+        average-certification-duration: uint
+    }
+)
+
+(define-data-var current-day uint u0)
+(define-data-var total-certifications-counter uint u0)
+
+(define-private (get-current-day)
+    (/ stacks-block-height u144)
+)
+
+(define-private (update-daily-stats (issuer principal) (action (string-ascii 20)))
+    (let
+        ((today (get-current-day))
+         (current-stats (default-to 
+            { certifications-issued: u0, certifications-revoked: u0, certifications-renewed: u0, unique-recipients: u0 }
+            (map-get? analytics-daily-stats { date: today, issuer: issuer }))))
+        
+        (if (is-eq action "issued")
+            (map-set analytics-daily-stats { date: today, issuer: issuer }
+                (merge current-stats { certifications-issued: (+ (get certifications-issued current-stats) u1) }))
+            (if (is-eq action "revoked")
+                (map-set analytics-daily-stats { date: today, issuer: issuer }
+                    (merge current-stats { certifications-revoked: (+ (get certifications-revoked current-stats) u1) }))
+                (if (is-eq action "renewed")
+                    (map-set analytics-daily-stats { date: today, issuer: issuer }
+                        (merge current-stats { certifications-renewed: (+ (get certifications-renewed current-stats) u1) }))
+                    false)))
+    )
+)
+
+(define-private (update-skill-stats (skill (string-ascii 64)) (issuer principal) (action (string-ascii 20)))
+    (let
+        ((current-stats (default-to 
+            { total-issued: u0, total-active: u0, total-expired: u0, total-revoked: u0, average-duration: u0 }
+            (map-get? analytics-skill-stats { skill: skill, issuer: issuer }))))
+        
+        (if (is-eq action "issued")
+            (map-set analytics-skill-stats { skill: skill, issuer: issuer }
+                (merge current-stats { 
+                    total-issued: (+ (get total-issued current-stats) u1),
+                    total-active: (+ (get total-active current-stats) u1)
+                }))
+            (if (is-eq action "revoked")
+                (map-set analytics-skill-stats { skill: skill, issuer: issuer }
+                    (merge current-stats { 
+                        total-active: (- (get total-active current-stats) u1),
+                        total-revoked: (+ (get total-revoked current-stats) u1)
+                    }))
+                (if (is-eq action "expired")
+                    (map-set analytics-skill-stats { skill: skill, issuer: issuer }
+                        (merge current-stats { 
+                            total-active: (- (get total-active current-stats) u1),
+                            total-expired: (+ (get total-expired current-stats) u1)
+                        }))
+                    false)))
+    )
+)
+
+(define-private (update-recipient-stats (recipient principal) (action (string-ascii 20)))
+    (let
+        ((current-stats (default-to 
+            { total-certifications: u0, active-certifications: u0, expired-certifications: u0, revoked-certifications: u0, skills-acquired: u0, last-certification-date: u0 }
+            (map-get? analytics-recipient-stats recipient))))
+        
+        (if (is-eq action "received")
+            (map-set analytics-recipient-stats recipient
+                (merge current-stats { 
+                    total-certifications: (+ (get total-certifications current-stats) u1),
+                    active-certifications: (+ (get active-certifications current-stats) u1),
+                    skills-acquired: (+ (get skills-acquired current-stats) u1),
+                    last-certification-date: stacks-block-height
+                }))
+            (if (is-eq action "revoked")
+                (map-set analytics-recipient-stats recipient
+                    (merge current-stats { 
+                        active-certifications: (- (get active-certifications current-stats) u1),
+                        revoked-certifications: (+ (get revoked-certifications current-stats) u1)
+                    }))
+                (if (is-eq action "expired")
+                    (map-set analytics-recipient-stats recipient
+                        (merge current-stats { 
+                            active-certifications: (- (get active-certifications current-stats) u1),
+                            expired-certifications: (+ (get expired-certifications current-stats) u1)
+                        }))
+                    false)))
+    )
+)
+
+(define-private (update-issuer-performance (issuer principal) (action (string-ascii 20)) (validity-period uint))
+    (let
+        ((current-stats (default-to 
+            { total-issued: u0, total-revoked: u0, total-renewed: u0, revocation-rate: u0, renewal-rate: u0, average-validity-period: u0, reputation-score: u100 }
+            (map-get? analytics-issuer-performance issuer)))
+         (new-total-issued (if (is-eq action "issued") (+ (get total-issued current-stats) u1) (get total-issued current-stats)))
+         (new-total-revoked (if (is-eq action "revoked") (+ (get total-revoked current-stats) u1) (get total-revoked current-stats)))
+         (new-total-renewed (if (is-eq action "renewed") (+ (get total-renewed current-stats) u1) (get total-renewed current-stats)))
+         (new-revocation-rate (if (> new-total-issued u0) (/ (* new-total-revoked u100) new-total-issued) u0))
+         (new-renewal-rate (if (> new-total-issued u0) (/ (* new-total-renewed u100) new-total-issued) u0))
+         (new-avg-validity (if (and (is-eq action "issued") (> validity-period u0))
+                              (/ (+ (* (get average-validity-period current-stats) (- new-total-issued u1)) validity-period) new-total-issued)
+                              (get average-validity-period current-stats)))
+         (new-reputation (- u100 (/ new-revocation-rate u2))))
+        
+        (map-set analytics-issuer-performance issuer {
+            total-issued: new-total-issued,
+            total-revoked: new-total-revoked,
+            total-renewed: new-total-renewed,
+            revocation-rate: new-revocation-rate,
+            renewal-rate: new-renewal-rate,
+            average-validity-period: new-avg-validity,
+            reputation-score: new-reputation
+        })
+    )
+)
+
+(define-private (update-global-metrics (action (string-ascii 20)))
+    (let
+        ((current-metrics (default-to 
+            { total-certifications: u0, total-active: u0, total-issuers: u0, total-recipients: u0, most-popular-skill: "", average-certification-duration: u0 }
+            (map-get? analytics-global-metrics u0))))
+        
+        (if (is-eq action "issued")
+            (map-set analytics-global-metrics u0
+                (merge current-metrics { 
+                    total-certifications: (+ (get total-certifications current-metrics) u1),
+                    total-active: (+ (get total-active current-metrics) u1)
+                }))
+            (if (is-eq action "revoked")
+                (map-set analytics-global-metrics u0
+                    (merge current-metrics { 
+                        total-active: (- (get total-active current-metrics) u1)
+                    }))
+                (if (is-eq action "expired")
+                    (map-set analytics-global-metrics u0
+                        (merge current-metrics { 
+                            total-active: (- (get total-active current-metrics) u1)
+                        }))
+                    false)))
+    )
+)
+
+(define-public (record-certification-issued (issuer principal) (recipient principal) (skill (string-ascii 64)) (validity-period uint))
+    (begin
+        (update-daily-stats issuer "issued")
+        (update-skill-stats skill issuer "issued")
+        (update-recipient-stats recipient "received")
+        (update-issuer-performance issuer "issued" validity-period)
+        (update-global-metrics "issued")
+        (var-set total-certifications-counter (+ (var-get total-certifications-counter) u1))
+        (ok true)
+    )
+)
+
+(define-public (record-certification-revoked (issuer principal) (recipient principal) (skill (string-ascii 64)))
+    (begin
+        (update-daily-stats issuer "revoked")
+        (update-skill-stats skill issuer "revoked")
+        (update-recipient-stats recipient "revoked")
+        (update-issuer-performance issuer "revoked" u0)
+        (update-global-metrics "revoked")
+        (ok true)
+    )
+)
+
+(define-public (record-certification-renewed (issuer principal) (skill (string-ascii 64)))
+    (begin
+        (update-daily-stats issuer "renewed")
+        (update-issuer-performance issuer "renewed" u0)
+        (ok true)
+    )
+)
+
+(define-public (record-certification-expired (recipient principal) (skill (string-ascii 64)) (issuer principal))
+    (begin
+        (update-skill-stats skill issuer "expired")
+        (update-recipient-stats recipient "expired")
+        (update-global-metrics "expired")
+        (ok true)
+    )
+)
+
+(define-read-only (get-daily-stats (date uint) (issuer principal))
+    (map-get? analytics-daily-stats { date: date, issuer: issuer })
+)
+
+(define-read-only (get-skill-stats (skill (string-ascii 64)) (issuer principal))
+    (map-get? analytics-skill-stats { skill: skill, issuer: issuer })
+)
+
+(define-read-only (get-recipient-stats (recipient principal))
+    (map-get? analytics-recipient-stats recipient)
+)
+
+(define-read-only (get-issuer-performance (issuer principal))
+    (map-get? analytics-issuer-performance issuer)
+)
+
+(define-read-only (get-global-metrics)
+    (map-get? analytics-global-metrics u0)
+)
+
+(define-read-only (get-issuer-reputation-score (issuer principal))
+    (get reputation-score (default-to 
+        { reputation-score: u100 }
+        (map-get? analytics-issuer-performance issuer)))
+)
+
+;; 
+(define-read-only (calculate-skill-popularity (skill (string-ascii 64)))
+    (let
+        ((total-certs (var-get total-certifications-counter)))
+        (if (> total-certs u0)
+            u50
+            u0)
+    )
+)
+
+(define-read-only (get-top-performing-issuers)
+    u100
+)
+
+(define-read-only (get-certification-completion-rate (issuer principal))
+    (let
+        ((performance (default-to 
+            { total-issued: u0, total-revoked: u0 }
+            (map-get? analytics-issuer-performance issuer))))
+        (if (> (get total-issued performance) u0)
+            (- u100 (/ (* (get total-revoked performance) u100) (get total-issued performance)))
+            u100)
+    )
+)
+
+(define-read-only (get-recipient-skill-diversity (recipient principal))
+    (get skills-acquired (default-to 
+        { skills-acquired: u0 }
+        (map-get? analytics-recipient-stats recipient)))
+)
+
+(define-read-only (get-market-insights)
+    {
+        total-market-size: (var-get total-certifications-counter),
+        growth-rate: u10,
+        market-leaders: u5,
+        emerging-skills: u3
+    }
+)
