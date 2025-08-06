@@ -15,6 +15,11 @@ path = 'contracts/Pathway-Extension.clar'
 clarity_version = 3
 epoch = 3.1
 
+[contracts.Skill-Assessment-Engine]
+path = 'contracts/Skill-Assessment-Engine.clar'
+clarity_version = 3
+epoch = 3.1
+
 [repl.analysis]
 passes = ['check_checker']
 
