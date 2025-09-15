@@ -60,6 +60,11 @@ plan:
             path: "contracts\\Pathway-Extension.clar"
             clarity-version: 3
         - emulated-contract-publish:
+            contract-name: Reputation-Scoring-System
+            emulated-sender: ST1PQHQKV0RJXZFY1DGX8MNSNYVE3VGZJSRTPGZGM
+            path: "contracts\\Reputation-Scoring-System.clar"
+            clarity-version: 3
+        - emulated-contract-publish:
             contract-name: Skill-Assessment-Engine
             emulated-sender: ST1PQHQKV0RJXZFY1DGX8MNSNYVE3VGZJSRTPGZGM
             path: "contracts\\Skill-Assessment-Engine.clar"
